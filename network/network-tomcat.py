@@ -73,7 +73,7 @@ print("Confusion Matrix:")
 print(conf_matrix)
 
 # Predict on new data
-test_strings = ["10.1.40", "10.1.42"]
+test_strings = ["10.1.45", "10.1.46"] #  f1: 0,718; predictions: [[8.393585] [8.416471]]
 test_inputs = np.array([process_string(s) for s in test_strings])
 test_inputs = input_scaler.transform(test_inputs)
 test_inputs = test_inputs.reshape((test_inputs.shape[0], 1, test_inputs.shape[1]))
