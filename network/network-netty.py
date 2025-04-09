@@ -1,91 +1,113 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import tensorflow as tf
-from tensorflow import keras
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, precision_score, recall_score, f1_score, confusion_matrix
-from sklearn.model_selection import KFold
-from tensorflow.keras.layers import Embedding, Dense, Flatten, Input
-from tensorflow.keras.regularizers import l2
-from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import f1_score, precision_score, recall_score, confusion_matrix, mean_absolute_error, mean_squared_error, r2_score
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from datetime import datetime
 
-# Load data from file
-data = pd.read_csv("netty-data.csv", sep=';', decimal=',')
-input_strings = data.iloc[:, 0].astype(str).tolist()
-output_values = data.iloc[:, 1].astype(float).values
+# Load full dataset
+data = pd.read_csv('netty-data.csv', sep=';')
 
-# Feature extraction: Convert string to numerical representation
-def process_string(s):
-    parts = [int(part) for part in s.split('.')]
-    return parts + [sum(parts)]  # Adding sum as an additional feature
+# Preprocessing
+# Convert date to datetime and extract year, month, day
+data['Data'] = pd.to_datetime(data['Data'], format='%b %d, %Y')
+data['year'] = data['Data'].dt.year
+data['month'] = data['Data'].dt.month
+data['day'] = data['Data'].dt.day
 
-input_features = np.array([process_string(s) for s in input_strings])
+# Encode version into 3 numerical features (major, minor, patch)
+def split_version(ver):
+    major, minor, patch = map(int, ver.split('.'))
+    return pd.Series([major, minor, patch])
 
-# Normalize outputs
-scaler = MinMaxScaler()
-output_values = scaler.fit_transform(output_values.reshape(-1, 1))
+data[['ver_major', 'ver_minor', 'ver_patch']] = data['Wersja'].apply(split_version)
 
-# Cross-validation
-kf = KFold(n_splits=5, shuffle=True, random_state=42)
+# Convert median (string with comma) to float
+data['Mediana'] = data['Mediana'].str.replace(',', '.').astype(float)
 
-for train_idx, test_idx in kf.split(input_features):
-    train_features, test_features = input_features[train_idx], input_features[test_idx]
-    train_values, test_values = output_values[train_idx], output_values[test_idx]
+# Define features and target
+X = data[['year', 'month', 'day', 'ver_major', 'ver_minor', 'ver_patch']]
+y = data['Mediana']
 
-    # Define model
-    model = keras.Sequential([
-        Input(shape=(len(train_features[0]),)),
-        Dense(16, activation='relu', kernel_regularizer=l2(0.01)),  # L2 Regularization
-        Dense(8, activation='relu'),
-        Dense(1, activation='linear')
-    ])
+# Optionally scale features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
 
-    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+# Binarize y or make it multi-class if needed
+# For this case, treat it as classification: round Mediana to nearest 0.5 for class labels
+y_class = (y * 2).round() / 2  # e.g., 8.1 → 8.0
 
-    # Early stopping callback
-    early_stopping = EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)
+# Encode y classes
+le = LabelEncoder()
+y_encoded = le.fit_transform(y_class)
 
-    # Train model
-    model.fit(train_features, train_values, epochs=100, batch_size=2, verbose=1,
-              validation_data=(test_features, test_values), callbacks=[early_stopping])
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(X_scaled, y_encoded, test_size=0.2, random_state=42)
 
-    # Evaluate model
-    test_predictions = model.predict(test_features)
-    test_predictions = scaler.inverse_transform(test_predictions)
-    test_values = scaler.inverse_transform(test_values)
+# Neural Network model
+model = Sequential([
+    Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
+    Dropout(0.2),
+    Dense(32, activation='relu'),
+    Dense(len(np.unique(y_encoded)), activation='softmax')  # Multi-class classification
+])
 
-    mae = mean_absolute_error(test_values, test_predictions)
-    mse = mean_squared_error(test_values, test_predictions)
-    r2 = r2_score(test_values, test_predictions)
+model.compile(optimizer='adam',
+              loss='sparse_categorical_crossentropy',
+              metrics=['accuracy'])
 
-    # Convert regression output into categorical labels
-    test_values_rounded = np.round(test_values).astype(int)
-    test_predictions_rounded = np.round(test_predictions).astype(int)
+# Train the model
+history = model.fit(X_train, y_train, epochs=100, batch_size=16, validation_split=0.2, verbose=1)
 
-    # Ensure classification metrics only run if multiple unique classes exist
-    if len(np.unique(test_values_rounded)) > 1:
-        precision = precision_score(test_values_rounded, test_predictions_rounded, average='weighted', zero_division=1)
-        recall = recall_score(test_values_rounded, test_predictions_rounded, average='weighted', zero_division=1)
-        f1 = f1_score(test_values_rounded, test_predictions_rounded, average='weighted', zero_division=1)
-        conf_matrix = confusion_matrix(test_values_rounded, test_predictions_rounded)
-    else:
-        precision, recall, f1, conf_matrix = None, None, None, None
+# Predict
+y_pred_probs = model.predict(X_test)
+y_pred = np.argmax(y_pred_probs, axis=1)
 
-    print("Mean Absolute Error:", mae)
-    print("Mean Squared Error:", mse)
-    print("R-squared Score:", r2)
-    if precision is not None:
-        print("Precision:", precision)
-        print("Recall:", recall)
-        print("F1 Score:", f1)
-        print("Confusion Matrix:\n", conf_matrix)
-    else:
-        print("Classification metrics skipped due to lack of class variability.")
+# Evaluation
+precision = precision_score(y_test, y_pred, average='weighted')
+recall = recall_score(y_test, y_pred, average='weighted')
+f1 = f1_score(y_test, y_pred, average='weighted')
+mae = mean_absolute_error(le.inverse_transform(y_test), le.inverse_transform(y_pred))
+mse = mean_squared_error(le.inverse_transform(y_test), le.inverse_transform(y_pred))
+r2 = r2_score(le.inverse_transform(y_test), le.inverse_transform(y_pred))
+conf_matrix = confusion_matrix(y_test, y_pred)
 
-# Predict on new data
-test_strings = ["4.1.124", "4.1.125"] # f1=0,720; predictions: [[5.9780254] [5.9971867]]
-test_features = np.array([process_string(s) for s in test_strings])
-predictions = model.predict(test_features)
-predictions = scaler.inverse_transform(predictions)
+print(f"\nPrecision: {precision}")
+print(f"Recall: {recall}")
+print(f"F1 Score: {f1}")
+print(f"Mean Absolute Error: {mae}")
+print(f"Mean Squared Error: {mse}")
+print(f"R-squared Score: {r2}")
+print("Confusion Matrix:")
+print(conf_matrix)
 
-print("Predictions:", predictions)
+# Predict the value for 4.2.0, Apr 3, 2025
+input_version = '4.2.0'
+input_date = 'Apr 3, 2025'
+
+# Preprocess the input data
+input_date = pd.to_datetime(input_date, format='%b %d, %Y')
+input_year = input_date.year
+input_month = input_date.month
+input_day = input_date.day
+
+# Extract version numbers
+ver_major, ver_minor, ver_patch = map(int, input_version.split('.'))
+
+# Prepare input features in the same way as the training data
+input_features = np.array([[input_year, input_month, input_day, ver_major, ver_minor, ver_patch]])
+
+# Scale the input features
+input_scaled = scaler.transform(input_features)
+
+# Make the prediction
+prediction_prob = model.predict(input_scaled)
+predicted_class = np.argmax(prediction_prob, axis=1)
+
+# Convert the predicted class back to the original median value
+predicted_value = le.inverse_transform(predicted_class)
+
+print(f"\nPredicted median value for {input_version} on {input_date.strftime('%b %d, %Y')}: {predicted_value[0]}")
