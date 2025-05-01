@@ -1,0 +1,23 @@
+Rozpoczęcie zbierania danych
+19.03.2025
+
+Zakończenie zbierania danych
+31.03.2025
+
+Dane o wersjach i CVE
+https://mvnrepository.com/repos/central
+
+Poziom zagrożenia (CVSS)
+https://access.redhat.com/security/security-updates/cve
+
+Serwer spring boot
+<dependency>
+    <groupId>org.apache.tomcat.embed</groupId>
+    <artifactId>tomcat-embed-core</artifactId>
+</dependency>
+
+Serwer micronaut
+<dependency>
+	<groupId>io.netty</groupId>
+	<artifactId>netty-codec-http</artifactId>
+</dependency>
